@@ -1,22 +1,31 @@
 import pygame as pg
 import numpy as np
-import uuid
 import random
+from keras.utils import to_categorical
+from DQNagent import DQNAgent
 
 pg.font.init()
 pg.display.init()
+###
+MANUAL_MODE = False
+speed = 150
+###
+GAMES_TOTAL = 100
+GAMES_ELAPSED = 0
 win_count = 0
 lose_count = 0
-font = pg.font.SysFont('Comic Sans MS', 25)
-window_width = 700
-window_height = 700
-manual_controls = True
-grid_x = 13
-grid_y = 13
-#tank_start_x = (grid_x - 1) / 2
-#tank_start_y = (grid_y - 1) / 2
-tile_width = window_width / grid_x
-tile_height = window_height / grid_y
+screen_width = 700
+screen_height = 700
+window_width = 1050
+window_height = 750
+grid_x = 9
+grid_y = 9
+tile_margin = 3
+tile_width = screen_width / grid_x - tile_margin
+tile_height = screen_height / grid_y - tile_margin
+tile_font = pg.font.SysFont('Arial', int(tile_width / 2))
+info_font = pg.font.SysFont('Calibri', 36)
+
 tanks = []
 flags = []
 castles = []
@@ -24,26 +33,43 @@ tile_img_paths = {'empty': None, 'water': 'img/water.png', 'ground': 'img/ground
                 'castle': 'img/castle.png'}
 tile_durabilities = {'empty': 0, 'water': 0, 'ground': 2, 'brick': 4, 'castle': 1, 'castle_zone': 0}
 
+BG_COLOR = (240, 240, 240)
+
 
 class Game:
 
     def __init__(self):
         pg.display.set_caption('tanks or whatever')
         self.gameDisplay = pg.display.set_mode((window_width, window_height))
-        self.gameDisplay.fill((250, 250, 250))
-        self.running = False
-        self.win = False
+        self.gameDisplay.fill(BG_COLOR)
+        #self.screen_area = pg.Rect(0, 0, screen_width, screen_height)
+        #self.info_area = pg.Rect((screen_width + 25, screen_height + 25),
+        #                         (window_width - screen_width - 50, window_height - screen_height - 50))
+        self.running = True
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.ended = False
+        self.victory = False
+        self.loss = False
         self.grid = np.zeros((grid_x, grid_y), dtype=Tile)
-        pg.display.flip()
+        pg.display.update()
 
     def win(self):
-        return 1
+        global win_count
+        win_count += 1
+        print('win')
+        self.victory = True
+        self.running = False
+        self.ended = True
 
     def lose(self):
-        return 1
+        global lose_count
+        lose_count += 1
+        print('lose')
+        self.loss = True
+        self.running = False
+        self.ended = True
 
-    def reset(self):
-        return 1
 
 class Tile:
     def __init__(self, x, y, type):
@@ -51,11 +77,13 @@ class Tile:
         self.y = y
         self.type = type
         self.durability = tile_durabilities[self.type]
+        self.color = (0, 0, 0)
         self.items = []
         if type == 'empty':
             self.img = pg.Surface((tile_width, tile_height))
         elif type == 'castle_zone':
             self.img = pg.Surface((tile_width, tile_height))
+            self.img.fill((255, 0, 0))
         else:
             self.img = pg.image.load(tile_img_paths[type])
 
@@ -65,7 +93,8 @@ class Tile:
         self.img = img
 
     def get_screen_coords(self):
-        return self.x * tile_width, window_height - (self.y + 1) * tile_height
+        return 25 + self.x * tile_width + tile_margin * (self.x + 1), \
+                screen_height - (self.y + 1) * tile_height - tile_margin * (self.y + 1) + 25
 
     def show_shot(self, horizontal):
         return
@@ -91,9 +120,8 @@ class Castle_zone(Tile):
     def __init__(self, x, y):
         Tile.__init__(self, x, y, 'castle_zone')
 
-    def deliver_flag(self, flag):
+    def deliver(self, flag):
         game.win()
-
 
 class Tank(object):
 
@@ -103,13 +131,16 @@ class Tank(object):
         self.img = self.original_image
         self.tile = tile
         self.direction = direction
+        self.last_move = [0, 0, 0, 0]
         self.ammo = []
         self.target = None
+        self.took_flag = False
         self.has_flag = False
         self.flag = None
         self.get_target()
         tanks.append(self)
 
+    # [up, left, down, right]
     def update_direction(self):
         if np.array_equal(self.direction, [1, 0, 0, 0]):
             self.img = self.original_image
@@ -187,7 +218,7 @@ class Tank(object):
 
     #def drop_flag(self):
 
-    def deliver(self):
+    def check_delivery(self):
         if self.tile.type == 'castle_zone' and self.has_flag:
             self.tile.deliver(self.flag)
 
@@ -204,21 +235,27 @@ class Tank(object):
             new_tile = game.grid[self.tile.x, self.tile.y - 1]
         if new_tile and new_tile.type in ('empty', 'castle_zone'):
             self.tile = new_tile
+            if self.has_flag:
+                self.flag.tile = new_tile
+        else:
+            game.lose()
+        self.took_flag = False
         self.direction = move
         self.update_direction()
         self.get_target()
         self.pickup(self.tile)
-        self.deliver()
-
-    def pickup_flag(self, flag):
-        self.has_flag = True
-        self.flag = flag
-        flag.hide()
+        self.check_delivery()
 
     def pickup(self, tile):
         for item in tile.items:
             if isinstance(item, Flag):
                 self.pickup_flag(item)
+
+    def pickup_flag(self, flag):
+        self.has_flag = True
+        self.took_flag = True
+        self.flag = flag
+        flag.hide()
 
 class Pickup(object):
     def __init__(self, tile):
@@ -255,6 +292,11 @@ def draw_tank(tank):
     if tank.has_flag:
         game.gameDisplay.blit(pg.transform.scale(tank.flag.img, (int(tile_width/2), int(tile_height/2))), tank.tile.get_screen_coords())
 
+def draw_info():
+    games_textsurface = info_font.render('Game:' + str(GAMES_ELAPSED + 1) + '/' + str(GAMES_TOTAL), False, (0, 0, 0))
+    wl_textsurface = info_font.render('W/L:' + str(win_count) + '/' + str(lose_count), False, (0, 0, 0))
+    game.gameDisplay.blit(games_textsurface, (screen_width + 80, 50))
+    game.gameDisplay.blit(wl_textsurface, (screen_width + 80, 100))
 
 def draw_flag(flag):
     if not flag.picked_up:
@@ -262,6 +304,7 @@ def draw_flag(flag):
 
 
 def init_world():
+    clear()
     for col_idx, col in enumerate(game.grid):
         for row_idx, row in enumerate(col):
             if col_idx in range(0, 2) and row_idx in range(int(grid_y / 2) - 1, int(grid_y / 2) + 2):
@@ -273,9 +316,18 @@ def init_world():
                 # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
                 tile = Tile(row_idx, col_idx, random.choice(['empty']))
             game.grid[row_idx, col_idx] = tile
-    flag = Flag(game.grid[7, 7])
-    tank = Tank(1, game.grid[int(grid_x / 2 + 1), 0], [1, 0, 0, 0])
+    flag = Flag(game.grid[random.randint(0, grid_x - 1), random.randint(int(grid_y / 2), grid_y - 1)])
+    tank = Tank(1, game.grid[random.randint(0, grid_x - 1), random.randint(1, int(grid_y / 2))], [1, 0, 0, 0])
     update_screen()
+
+
+def clear():
+    global tanks
+    global flags
+    global castles
+    tanks = []
+    flags = []
+    castles = []
 
 
 def draw_world():
@@ -284,16 +336,17 @@ def draw_world():
             draw_tile(tile)
 
 
-def draw_tile(tile):
+def draw_tile(tile, show_durability = True):
     game.gameDisplay.blit(pg.transform.scale(tile.img, (int(tile_width), int(tile_height))), (tile.get_screen_coords()))
-    if tile.durability > 0:
-        textsurface = font.render(str(tile.durability), False, (255, 255, 255))
+    if tile.durability > 0 and show_durability:
+        textsurface = tile_font.render(str(tile.durability), False, (255, 0, 0))
         game.gameDisplay.blit(textsurface, tile.get_screen_coords())
 
 
 def update_screen():
     # game.gameDisplay.fill((255,255,255))
     draw_world()
+    draw_info()
     for tank in tanks:
         draw_tank(tank)
     for flag in flags:
@@ -301,21 +354,53 @@ def update_screen():
     pg.display.update()
 
 
-def run():
+def run(agent=None):
     pg.init()
     init_world()
+    global GAMES_ELAPSED
     while game.running:
-        if manual_controls:
+        if MANUAL_MODE:
             for tank in tanks:
                 tank.enable_manual_controls()
+        else:
+            agent.epsilon = 30 - GAMES_ELAPSED
+            state_old = agent.get_state(game, tanks[0], flags[0], castles[0])
+            # perform random actions based on agent.epsilon, or choose the action
+            if random.randint(0, 200) < agent.epsilon:
+                move = to_categorical(random.randint(0, 3), num_classes=4)
+            else:
+                # predict action based on the old state
+                prediction = agent.model.predict(state_old.reshape((1, 17)))
+                move = to_categorical(np.argmax(prediction[0]), num_classes=4)
+            tanks[0].move(move)
+
+            state_new = agent.get_state(game, tanks[0], flags[0], castles[0])
+
+            reward = agent.set_reward(tanks[0], game)
+
+            # train short memory base on the new action and state
+            agent.train_short_memory(state_old, move, reward, state_new, game.loss)
+
+            # store the new data into a long term memory
+            agent.remember(state_old, move, reward, state_new, game.loss)
+            pg.time.wait(speed)
+
+
+
         update_screen()
-        # else: auto
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 game.running = False
                 pg.quit()
+        if game.ended:
+            GAMES_ELAPSED += 1
+            if not MANUAL_MODE:
+                agent.replay_new(agent.memory)
+            break
 
 
-game = Game()
-game.running = True
-run()
+agent = DQNAgent()
+while GAMES_ELAPSED < GAMES_TOTAL:
+    game = Game()
+    game.running = True
+    run(agent)
