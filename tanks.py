@@ -3,14 +3,16 @@ import numpy as np
 import random
 from keras.utils import to_categorical
 from DQNagent import DQNAgent
+import queue
+import datetime
 
 pg.font.init()
 pg.display.init()
 ###
 MANUAL_MODE = False
-speed = 150
+speed = 50
 ###
-GAMES_TOTAL = 100
+GAMES_TOTAL = 200
 GAMES_ELAPSED = 0
 win_count = 0
 lose_count = 0
@@ -18,8 +20,8 @@ screen_width = 700
 screen_height = 700
 window_width = 1050
 window_height = 750
-grid_x = 9
-grid_y = 9
+grid_x = 11
+grid_y = 11
 tile_margin = 3
 tile_width = screen_width / grid_x - tile_margin
 tile_height = screen_height / grid_y - tile_margin
@@ -39,7 +41,7 @@ BG_COLOR = (240, 240, 240)
 class Game:
 
     def __init__(self):
-        pg.display.set_caption('tanks or whatever')
+        pg.display.set_caption('tanks teach themselves')
         self.gameDisplay = pg.display.set_mode((window_width, window_height))
         self.gameDisplay.fill(BG_COLOR)
         #self.screen_area = pg.Rect(0, 0, screen_width, screen_height)
@@ -57,7 +59,6 @@ class Game:
     def win(self):
         global win_count
         win_count += 1
-        print('win')
         self.victory = True
         self.running = False
         self.ended = True
@@ -65,7 +66,6 @@ class Game:
     def lose(self):
         global lose_count
         lose_count += 1
-        print('lose')
         self.loss = True
         self.running = False
         self.ended = True
@@ -132,6 +132,7 @@ class Tank(object):
         self.tile = tile
         self.direction = direction
         self.last_move = [0, 0, 0, 0]
+        self.prev_tiles = queue.Queue(4)
         self.ammo = []
         self.target = None
         self.took_flag = False
@@ -234,6 +235,11 @@ class Tank(object):
         elif np.array_equal(move, [0, 0, 1, 0]) and self.tile.y > 0:
             new_tile = game.grid[self.tile.x, self.tile.y - 1]
         if new_tile and new_tile.type in ('empty', 'castle_zone'):
+            # manage prev tiles queue
+            if self.prev_tiles.full():
+                self.prev_tiles.get_nowait()
+            self.prev_tiles.put_nowait((self.tile.x, self.tile.y))
+
             self.tile = new_tile
             if self.has_flag:
                 self.flag.tile = new_tile
@@ -293,8 +299,8 @@ def draw_tank(tank):
         game.gameDisplay.blit(pg.transform.scale(tank.flag.img, (int(tile_width/2), int(tile_height/2))), tank.tile.get_screen_coords())
 
 def draw_info():
-    games_textsurface = info_font.render('Game:' + str(GAMES_ELAPSED + 1) + '/' + str(GAMES_TOTAL), False, (0, 0, 0))
-    wl_textsurface = info_font.render('W/L:' + str(win_count) + '/' + str(lose_count), False, (0, 0, 0))
+    games_textsurface = info_font.render('Epoch: ' + str(GAMES_ELAPSED + 1) + '/' + str(GAMES_TOTAL), True, (0, 0, 0))
+    wl_textsurface = info_font.render('W/L: ' + str(win_count) + '/' + str(lose_count), True, (0, 0, 0))
     game.gameDisplay.blit(games_textsurface, (screen_width + 80, 50))
     game.gameDisplay.blit(wl_textsurface, (screen_width + 80, 100))
 
@@ -303,21 +309,97 @@ def draw_flag(flag):
         game.gameDisplay.blit(pg.transform.scale(flag.img, (int(tile_width), int(tile_height))), flag.tile.get_screen_coords())
 
 
-def init_world():
+def init_world(base_loc='bottom', brick_chance=0.2):
     clear()
     for col_idx, col in enumerate(game.grid):
         for row_idx, row in enumerate(col):
-            if col_idx in range(0, 2) and row_idx in range(int(grid_y / 2) - 1, int(grid_y / 2) + 2):
-                if col_idx == 0 and row_idx == int(grid_y / 2):
-                    tile = Castle(row_idx, col_idx)
+            if base_loc == 'bottom':
+                if col_idx in range(int(grid_x / 2) - 1, int(grid_x / 2) + 2) and row_idx in range(0, 2):
+                    if col_idx == int(grid_x / 2) and row_idx == 0:
+                        tile = Castle(col_idx, row_idx)
+                    else:
+                        tile = Castle_zone(col_idx, row_idx)
                 else:
-                    tile = Castle_zone(row_idx, col_idx)
-            else:
-                # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
-                tile = Tile(row_idx, col_idx, random.choice(['empty']))
-            game.grid[row_idx, col_idx] = tile
-    flag = Flag(game.grid[random.randint(0, grid_x - 1), random.randint(int(grid_y / 2), grid_y - 1)])
-    tank = Tank(1, game.grid[random.randint(0, grid_x - 1), random.randint(1, int(grid_y / 2))], [1, 0, 0, 0])
+                    type = 'empty'
+                    if random.random() < brick_chance:
+                        type = 'brick'
+                    tile = Tile(col_idx, row_idx, type)
+                game.grid[col_idx, row_idx] = tile
+
+            elif base_loc == 'top':
+                if col_idx in range(int(grid_x / 2) - 1, int(grid_x / 2) + 2) and row_idx in range(grid_y - 2, grid_y):
+                    if col_idx == int(grid_x / 2) and row_idx == grid_y - 1:
+                        tile = Castle(col_idx, row_idx)
+                    else:
+                        tile = Castle_zone(col_idx, row_idx)
+                else:
+                    # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
+                    # tile = Tile(row_idx, col_idx, random.choice(['empty']))
+                    type = 'empty'
+                    if random.random() < brick_chance:
+                        type = 'brick'
+                    tile = Tile(col_idx, row_idx, type)
+                game.grid[col_idx, row_idx] = tile
+
+            elif base_loc == 'right':
+                if col_idx in range(grid_x - 2, grid_x) and row_idx in range(int(grid_y / 2) - 1, int(grid_y / 2) + 2):
+                    if col_idx == grid_x - 1 and row_idx == int(grid_y / 2):
+                        tile = Castle(col_idx, row_idx)
+                    else:
+                        tile = Castle_zone(col_idx, row_idx)
+                else:
+                    # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
+                    # tile = Tile(row_idx, col_idx, random.choice(['empty']))
+                    type = 'empty'
+                    if random.random() < brick_chance:
+                        type = 'brick'
+                    tile = Tile(col_idx, row_idx, type)
+                game.grid[col_idx, row_idx] = tile
+
+            elif base_loc == 'left':
+                if col_idx in range(0, 2) and row_idx in range(int(grid_y / 2) - 1, int(grid_y / 2) + 2):
+                    if col_idx == 0 and row_idx == int(grid_y / 2):
+                        tile = Castle(col_idx, row_idx)
+                    else:
+                        tile = Castle_zone(col_idx, row_idx)
+                else:
+                    # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
+                    # tile = Tile(row_idx, col_idx, random.choice(['empty']))
+                    type = 'empty'
+                    if random.random() < brick_chance:
+                        type = 'brick'
+                    tile = Tile(col_idx, row_idx, type)
+                game.grid[col_idx, row_idx] = tile
+
+            elif base_loc == 'center':
+                if col_idx in range(int(grid_x / 2) - 1, int(grid_x / 2) + 2) and row_idx in range(int(grid_y / 2) - 1, int(grid_y / 2) + 2):
+                    if col_idx == int(grid_x / 2) and row_idx == int(grid_y / 2):
+                        tile = Castle(col_idx, row_idx)
+                    else:
+                        tile = Castle_zone(col_idx, row_idx)
+                else:
+                    # tile = Tile(row_idx, col_idx, random.choice(['ground', 'brick', 'water', 'empty']))
+                    # tile = Tile(row_idx, col_idx, random.choice(['empty']))
+                    type = 'empty'
+                    if random.random() < brick_chance:
+                        type = 'brick'
+                    tile = Tile(col_idx, row_idx, type)
+                game.grid[col_idx, row_idx] = tile
+
+    if base_loc in ('top', 'bottom'):
+        tank_location_x = castles[0].x + 1
+        tank_location_y = castles[0].y
+    else:
+        tank_location_x = castles[0].x
+        tank_location_y = castles[0].y + 1
+
+    flag_location_x = random.randint(0, grid_x - 1)
+    flag_location_y = random.randint(0, grid_y - 1)
+    while game.grid[flag_location_x, flag_location_y].type != 'empty':
+        flag_location_x = random.randint(0, grid_x - 1)
+        flag_location_y = random.randint(int(grid_y / 2), grid_y - 1)
+    flag = Flag(game.grid[flag_location_x, flag_location_y])
+    tank = Tank(1, game.grid[tank_location_x, tank_location_y], [1, 0, 0, 0])
     update_screen()
 
 
@@ -344,7 +426,7 @@ def draw_tile(tile, show_durability = True):
 
 
 def update_screen():
-    # game.gameDisplay.fill((255,255,255))
+    game.gameDisplay.fill(BG_COLOR)
     draw_world()
     draw_info()
     for tank in tanks:
@@ -355,18 +437,16 @@ def update_screen():
 
 
 def run(agent=None):
-    pg.init()
-    init_world()
+    init_world(random.choice(['top', 'bottom', 'right', 'left', 'center']), 0)
     global GAMES_ELAPSED
     while game.running:
         if MANUAL_MODE:
             for tank in tanks:
                 tank.enable_manual_controls()
         else:
-            agent.epsilon = 30 - GAMES_ELAPSED
             state_old = agent.get_state(game, tanks[0], flags[0], castles[0])
             # perform random actions based on agent.epsilon, or choose the action
-            if random.randint(0, 200) < agent.epsilon:
+            if random.randint(0, 200) < agent.epsilon - GAMES_ELAPSED:
                 move = to_categorical(random.randint(0, 3), num_classes=4)
             else:
                 # predict action based on the old state
@@ -399,8 +479,11 @@ def run(agent=None):
             break
 
 
+pg.init()
 agent = DQNAgent()
 while GAMES_ELAPSED < GAMES_TOTAL:
     game = Game()
     game.running = True
     run(agent)
+now = datetime.datetime.now()
+agent.model.save_weights('weights/weights_' + now.strftime("%Y-%m-%d_%H-%M-%S") + '.hdf5')

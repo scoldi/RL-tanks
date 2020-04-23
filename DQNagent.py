@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from operator import add
 
+READ_WEIGHTS = False
+
 class DQNAgent(object):
 
     def __init__(self):
@@ -15,9 +17,11 @@ class DQNAgent(object):
         self.agent_target = 1
         self.agent_predict = 0
         self.learning_rate = 0.0005
-        self.model = self.network()
-        #self.model = self.network("weights.hdf5")
-        self.epsilon = 30
+        if READ_WEIGHTS:
+            self.model = self.network("weights.hdf5")
+        else:
+            self.model = self.network()
+        self.epsilon = 100
         self.actual = []
         self.memory = []
 
@@ -79,6 +83,9 @@ class DQNAgent(object):
 
     def set_reward(self, tank, game):
         self.reward = 0
+        if (tank.tile.x, tank.tile.y) in list(tank.prev_tiles.queue):
+            self.reward = -1
+            print('Backtracking! reward: ', self.reward)
         if tank.took_flag:
             self.reward = 5
             print('Took flag! reward: ', self.reward)
